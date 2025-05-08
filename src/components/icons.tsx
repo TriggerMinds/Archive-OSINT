@@ -21,7 +21,7 @@ export function Logo(props: SVGProps<SVGSVGElement>) {
       <text
         x="55"
         y="35"
-        fontFamily="var(--font-geist-mono), monospace"
+        fontFamily="var(--font-roboto-mono), monospace"
         fontSize="28"
         fontWeight="bold"
         fill="hsl(var(--foreground))"
