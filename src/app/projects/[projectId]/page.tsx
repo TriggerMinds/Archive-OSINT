@@ -1,27 +1,18 @@
+
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { QueryBuilderPanel } from '@/components/query-builder/query-builder-panel';
 import { ResultsPanel } from '@/components/results-panel/results-panel';
-import type { Project, SearchResultItem } from "@/types/archive"; // QueryField, QueryDateRange removed as they are handled by QueryBuilderPanel
+import type { Project, SearchResultItem } from "@/types/archive";
 import { MainHeader } from '@/components/main-header'; 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useToast } from '@/hooks/use-toast';
-import { searchInternetArchive } from '@/services/archive'; // Import the new service
+import { searchInternetArchive } from '@/services/archive';
+import { getProjectDetails, saveItemToProject as apiSaveItemToProject, removeItemFromProject as apiRemoveItemFromProject, getSavedItemsForProject } from '@/services/firebaseService';
 
-// Mock project data fetching
-const fetchProjectDetails = async (projectId: string): Promise<Project | null> => {
-  await new Promise(resolve => setTimeout(resolve, 300)); 
-  const mockProjects: Project[] = [
-    { id: "project-alpha", name: "JFK Assassination Archive Dive", description: "Investigating obscure newsreels and eyewitness footage related to the JFK assassination.", createdAt: "2023-01-15T10:00:00Z", lastModified: "2024-07-26T14:30:00Z" },
-    { id: "project-beta", name: "Cold War Propaganda Analysis", description: "Analyzing propaganda films from the Cold War era from various national archives.", createdAt: "2023-03-22T11:00:00Z", lastModified: "2024-07-20T09:15:00Z" },
-    { id: "project-gamma", name: "Lost Media Search: Early Animation", description: "Attempting to uncover lost animated shorts from the early 20th century.", createdAt: "2023-05-10T12:00:00Z", lastModified: "2024-06-10T18:45:00Z" },
-  ];
-  return mockProjects.find(p => p.id === projectId) || null;
-};
-
-// mockSearch function is removed.
+type SavedItemsMap = Map<string, Pick<SearchResultItem, 'annotations' | 'tags'>>;
 
 export default function ProjectWorkspacePage() {
   const params = useParams();
@@ -30,36 +21,63 @@ export default function ProjectWorkspacePage() {
   
   const [project, setProject] = useState<Project | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
+  const [savedItemsMap, setSavedItemsMap] = useState<SavedItemsMap>(new Map());
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false); 
   const { toast } = useToast();
   const [pageLoading, setPageLoading] = useState(true);
 
 
-  useEffect(() => {
+  const fetchProjectData = useCallback(async () => {
     if (projectId) {
       setPageLoading(true);
-      fetchProjectDetails(projectId).then(data => {
-        if (data) {
-          setProject(data);
+      try {
+        const projectData = await getProjectDetails(projectId);
+        if (projectData) {
+          setProject(projectData);
+          const itemsMap = await getSavedItemsForProject(projectId);
+          setSavedItemsMap(itemsMap);
         } else {
           toast({ title: "Error", description: "Project not found.", variant: "destructive" });
           router.push('/projects'); 
         }
-      }).finally(() => setPageLoading(false));
+      } catch (error) {
+        toast({ title: "Error Loading Project", description: error instanceof Error ? error.message : "Could not load project details.", variant: "destructive" });
+        router.push('/projects');
+      } finally {
+        setPageLoading(false);
+      }
     } else {
        setPageLoading(false); 
     }
   }, [projectId, toast, router]);
 
-  const handleSearch = async (queryString: string) => { // Signature changed
+  useEffect(() => {
+    fetchProjectData();
+  }, [fetchProjectData]);
+
+  const handleSearch = async (queryString: string) => {
     setIsSearching(true);
     setHasSearched(true);
-    setSearchResults([]); // Clear previous results
+    setSearchResults([]); 
     try {
-      const results = await searchInternetArchive(queryString);
-      setSearchResults(results);
-      if (results.length === 0 && queryString.trim() !== "mediatype:(movies OR video)") { // Don't toast for default "all videos" query if it yields nothing
+      const rawResults = await searchInternetArchive(queryString);
+      // Enrich results with saved data
+      const enrichedResults = rawResults.map(item => {
+        if (savedItemsMap.has(item.id)) {
+          const savedData = savedItemsMap.get(item.id);
+          return {
+            ...item,
+            isSaved: true,
+            annotations: savedData?.annotations,
+            tags: savedData?.tags,
+          };
+        }
+        return item;
+      });
+      setSearchResults(enrichedResults);
+
+      if (enrichedResults.length === 0 && queryString.trim() !== "mediatype:(movies OR video)") {
         toast({
             title: "No Results",
             description: "Your search did not return any results. Try a different query or use the AI Query Enhancer.",
@@ -74,30 +92,60 @@ export default function ProjectWorkspacePage() {
     }
   };
 
-  const handleSaveItemToProject = (itemToSave: SearchResultItem) => {
-    setSearchResults(prevResults => 
-      prevResults.map(item => 
-        item.id === itemToSave.id ? { ...item, ...itemToSave } : item
-      )
-    );
-    toast({
-      title: itemToSave.isSaved ? "Item Saved" : "Item Unsaved",
-      description: `${itemToSave.title} has been ${itemToSave.isSaved ? 'saved to' : 'removed from'} your project.`,
-    });
+  const handleSaveItemToProject = async (itemToSave: SearchResultItem) => {
+    if (!project) return;
+
+    try {
+      if (itemToSave.isSaved) {
+        await apiSaveItemToProject(project.id, itemToSave);
+        setSavedItemsMap(prevMap => new Map(prevMap).set(itemToSave.id, { annotations: itemToSave.annotations, tags: itemToSave.tags }));
+        toast({
+          title: "Item Saved",
+          description: `${itemToSave.title} has been saved to your project.`,
+        });
+      } else {
+        // If isSaved is false, it means we are "unsaving" or removing it
+        await apiRemoveItemFromProject(project.id, itemToSave.id);
+        setSavedItemsMap(prevMap => {
+          const newMap = new Map(prevMap);
+          newMap.delete(itemToSave.id);
+          return newMap;
+        });
+        toast({
+          title: "Item Unsaved",
+          description: `${itemToSave.title} has been removed from your project.`,
+        });
+      }
+      // Update local search results for immediate UI feedback
+      setSearchResults(prevResults => 
+        prevResults.map(item => 
+          item.id === itemToSave.id ? { ...item, ...itemToSave } : item 
+        )
+      );
+    } catch (error) {
+      toast({
+        title: "Error Updating Item",
+        description: `Could not update ${itemToSave.title}. ${error instanceof Error ? error.message : ""}`,
+        variant: "destructive",
+      });
+       // Optionally revert local state change if Firebase update failed
+       // For simplicity, current local state update remains optimistic
+    }
   };
+
 
   if (pageLoading) {
      return (
-      <div className="flex items-center justify-center flex-1 h-full">
-        <p>Loading project details...</p>
+      <div className="flex flex-1 flex-col items-center justify-center h-full">
+        <p className="text-muted-foreground">Loading project details...</p>
       </div>
     );
   }
 
   if (!project) {
      return (
-      <div className="flex items-center justify-center flex-1 h-full">
-        <p>Project not found or could not be loaded.</p>
+      <div className="flex flex-1 flex-col items-center justify-center h-full">
+        <p className="text-muted-foreground">Project not found or could not be loaded.</p>
       </div>
     );
   }
@@ -105,6 +153,7 @@ export default function ProjectWorkspacePage() {
 
   return (
     <>
+      {/* MainHeader is now in the layout, project name can be passed via context or fetched in layout if needed */}
       <div className="flex-1 flex flex-col overflow-hidden h-[calc(100vh-4rem)]">
         <ResizablePanelGroup direction="horizontal" className="flex-grow rounded-lg border-0">
           <ResizablePanel defaultSize={35} minSize={25} maxSize={50}>

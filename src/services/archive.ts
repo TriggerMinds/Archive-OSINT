@@ -1,10 +1,10 @@
 
 // src/services/archive.ts
 
-import type { SearchResultItem, VideoMetadata } from '@/types/archive';
-import { format } from 'date-fns';
+import type { SearchResultItem, VideoMetadata, ArchiveFileMetadata } from '@/types/archive';
 
 const API_BASE_URL = 'https://archive.org/advancedsearch.php';
+const METADATA_API_BASE_URL = 'https://archive.org/metadata';
 const DEFAULT_FIELDS = [
   'identifier', 'title', 'description', 'date', 'publicdate', 
   'creator', 'subject', 'collection', 'mediatype', 'year', 'type', 'avg_rating', 'num_reviews'
@@ -34,33 +34,24 @@ function createSnippet(text: string | undefined | null, maxLength: number = 200)
 
 
 export async function searchInternetArchive(queryStringWithParams: string): Promise<SearchResultItem[]> {
-  // queryStringWithParams is expected to be a URLSearchParams-compatible string, e.g., "q=searchTerm" or potentially empty
-  
   const params = new URLSearchParams(queryStringWithParams);
-  
   let currentQuery = params.get('q') || '';
 
-  // Ensure query is for videos only, unless already specified by a mediatype field search
-  // Common video mediatypes: movies, video, film, animation, etree (concerts), data (some news archives), collection (can contain videos)
-  // Prioritize 'movies' and 'video' as primary, others are for broader inclusion if needed.
   const videoMediaTypes = '(mediatype:movies OR mediatype:video OR mediatype:film OR mediatype:television OR mediatype:webcast OR mediatype:vlog)';
   
   if (!currentQuery.toLowerCase().includes('mediatype:')) {
     if (currentQuery.trim()) {
       currentQuery = `(${currentQuery}) AND ${videoMediaTypes}`;
     } else {
-      // If the original query string was empty, default to all videos
       currentQuery = videoMediaTypes;
     }
   }
   params.set('q', currentQuery);
   
-  // Set essential parameters
-  params.delete('fl[]'); // Clear existing fl[] if any, to set our default
+  params.delete('fl[]'); 
   DEFAULT_FIELDS.forEach(field => params.append('fl[]', field));
   params.set('rows', ROWS_PER_PAGE.toString());
   params.set('output', 'json');
-
 
   const fullUrl = `${API_BASE_URL}?${params.toString()}`;
   console.log("Requesting IA URL:", fullUrl);
@@ -82,12 +73,11 @@ export async function searchInternetArchive(queryStringWithParams: string): Prom
     
     const results: SearchResultItem[] = data.response.docs.map((doc: any): SearchResultItem => {
       const identifier = doc.identifier || `unknown-${Math.random().toString(36).substring(7)}`;
-      
       const title = (Array.isArray(doc.title) ? doc.title[0] : doc.title) || "Untitled";
       
       let rawDescription = doc.description;
       if (Array.isArray(rawDescription)) {
-        rawDescription = rawDescription.join('\n\n'); // Join multiple description paragraphs
+        rawDescription = rawDescription.join('\n\n');
       }
       const descriptionString = typeof rawDescription === 'string' ? rawDescription : '';
 
@@ -96,7 +86,6 @@ export async function searchInternetArchive(queryStringWithParams: string): Prom
         title: title,
         description: descriptionString,
         subjects: normalizeToArray(doc.subject),
-        // Prefer publicdate, fallback to date or year. Ensure it's a string.
         datePublished: String(doc.publicdate || doc.date || doc.year || ''), 
         creator: Array.isArray(doc.creator) ? doc.creator.join(', ') : (typeof doc.creator === 'string' ? doc.creator : undefined),
         collection: normalizeToArray(doc.collection),
@@ -119,6 +108,32 @@ export async function searchInternetArchive(queryStringWithParams: string): Prom
 
   } catch (error) {
     console.error('Failed to fetch from Internet Archive:', error);
+    // Ensure an array is returned even on error to prevent downstream issues.
+    // The error is thrown so the caller can handle it (e.g., show a toast).
+    // If a Promise<SearchResultItem[] | []> signature is preferred, return [] here instead of re-throwing.
     throw error; 
+  }
+}
+
+
+export async function fetchItemFilesMetadata(identifier: string): Promise<ArchiveFileMetadata[]> {
+  const url = `${METADATA_API_BASE_URL}/${identifier}/files`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("IA Metadata API Error Response for files:", errorText);
+      throw new Error(`Failed to fetch file metadata for ${identifier}: ${response.statusText}`);
+    }
+    const filesData: ArchiveFileMetadata[] = await response.json();
+    // Filter out directories or non-downloadable files if necessary, here we assume all are files
+    // Add full download URL
+    return filesData.map(file => ({
+      ...file,
+      downloadUrl: `https://archive.org/download/${identifier}${file.name.startsWith('.') ? file.name.substring(1) : file.name}`
+    }));
+  } catch (error) {
+    console.error(`Error fetching files metadata for ${identifier}:`, error);
+    return []; // Return empty array on error
   }
 }

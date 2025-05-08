@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect } from "react";
@@ -9,18 +10,9 @@ import { PlusCircle, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardHeader, CardFooter } from "@/components/ui/card"; // Added import
-
-// Mock data fetching
-const fetchProjects = async (): Promise<Project[]> => {
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 500));
-  return [
-    { id: "project-alpha", name: "JFK Assassination Archive Dive", description: "Investigating obscure newsreels and eyewitness footage related to the JFK assassination.", createdAt: "2023-01-15T10:00:00Z", lastModified: "2024-07-26T14:30:00Z" },
-    { id: "project-beta", name: "Cold War Propaganda Analysis", description: "Analyzing propaganda films from the Cold War era from various national archives.", createdAt: "2023-03-22T11:00:00Z", lastModified: "2024-07-20T09:15:00Z" },
-    { id: "project-gamma", name: "Lost Media Search: Early Animation", description: "Attempting to uncover lost animated shorts from the early 20th century.", createdAt: "2023-05-10T12:00:00Z", lastModified: "2024-06-10T18:45:00Z" },
-  ];
-};
+import { Card, CardHeader, CardFooter } from "@/components/ui/card";
+import { getProjects, createProject as apiCreateProject } from "@/services/firebaseService";
+import { useToast } from "@/hooks/use-toast";
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -29,40 +21,66 @@ export default function ProjectsPage() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     const loadProjects = async () => {
       setIsLoading(true);
-      const fetchedProjects = await fetchProjects();
-      setProjects(fetchedProjects);
-      setIsLoading(false);
+      try {
+        const fetchedProjects = await getProjects();
+        setProjects(fetchedProjects);
+      } catch (error) {
+        toast({
+          title: "Error Loading Projects",
+          description: error instanceof Error ? error.message : "Could not fetch projects.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoading(false);
+      }
     };
     loadProjects();
-  }, []);
+  }, [toast]);
 
-  const handleCreateProject = () => {
+  const handleCreateProject = async () => {
     if (!newProjectName.trim()) {
-      // Basic validation, real app would use react-hook-form/zod
-      alert("Project name is required.");
+      toast({
+        title: "Validation Error",
+        description: "Project name is required.",
+        variant: "destructive",
+      });
       return;
     }
-    const newProject: Project = {
-      id: `project-${Date.now().toString()}`, // Simple unique ID
-      name: newProjectName,
-      description: newProjectDescription,
-      createdAt: new Date().toISOString(),
-      lastModified: new Date().toISOString(),
-    };
-    setProjects(prevProjects => [newProject, ...prevProjects]);
-    setNewProjectName("");
-    setNewProjectDescription("");
-    setIsCreateDialogOpen(false);
-    // In a real app, you would POST this to your backend.
+    setIsCreatingProject(true);
+    try {
+      const newProjectData = {
+        name: newProjectName,
+        description: newProjectDescription,
+      };
+      const newProject = await apiCreateProject(newProjectData);
+      setProjects(prevProjects => [newProject, ...prevProjects]);
+      setNewProjectName("");
+      setNewProjectDescription("");
+      setIsCreateDialogOpen(false);
+      toast({
+        title: "Project Created",
+        description: `Project "${newProject.name}" has been successfully created.`,
+      });
+    } catch (error) {
+      toast({
+        title: "Error Creating Project",
+        description: error instanceof Error ? error.message : "Could not create project.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreatingProject(false);
+    }
   };
 
   const filteredProjects = projects.filter(project =>
     project.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    project.description?.toLowerCase().includes(searchTerm.toLowerCase())
+    (project.description && project.description.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   return (
@@ -104,6 +122,7 @@ export default function ProjectsPage() {
                     onChange={(e) => setNewProjectName(e.target.value)}
                     className="col-span-3"
                     placeholder="Project Title"
+                    disabled={isCreatingProject}
                   />
                 </div>
                 <div className="grid grid-cols-4 items-center gap-4">
@@ -116,12 +135,15 @@ export default function ProjectsPage() {
                     onChange={(e) => setNewProjectDescription(e.target.value)}
                     className="col-span-3"
                     placeholder="Briefly describe your project (optional)"
+                    disabled={isCreatingProject}
                   />
                 </div>
               </div>
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setIsCreateDialogOpen(false)}>Cancel</Button>
-                <Button type="submit" onClick={handleCreateProject}>Create Project</Button>
+                <Button type="button" variant="outline" onClick={() => setIsCreateDialogOpen(false)} disabled={isCreatingProject}>Cancel</Button>
+                <Button type="submit" onClick={handleCreateProject} disabled={isCreatingProject}>
+                  {isCreatingProject ? "Creating..." : "Create Project"}
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
