@@ -9,6 +9,7 @@ import { PlusCircle, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Card, CardHeader, CardFooter } from "@/components/ui/card"; // Added import
 
 // Mock data fetching
 const fetchProjects = async (): Promise<Project[]> => {
