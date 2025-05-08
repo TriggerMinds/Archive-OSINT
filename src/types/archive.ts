@@ -9,11 +9,11 @@ export interface Project {
 export interface VideoMetadata {
   title: string;
   description: string;
-  subjects: string[]; // Changed from string to string[] for better representation
+  subjects: string[]; 
   identifier: string; // Internet Archive identifier
   datePublished?: string;
   creator?: string;
-  collection?: string;
+  collection?: string[]; // Changed to string[]
   // Add other relevant metadata fields
 }
 
@@ -48,3 +48,4 @@ export interface QueryDateRange {
   startDate?: Date;
   endDate?: Date;
 }
+

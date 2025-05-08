@@ -67,7 +67,9 @@ export function VideoDetailView({ item, onClose, onSaveItem }: VideoDetailViewPr
                 <p><strong>Description:</strong> {item.metadata.description || "No description available."}</p>
                 {item.metadata.datePublished && <p><strong>Published:</strong> {item.metadata.datePublished}</p>}
                 {item.metadata.creator && <p><strong>Creator:</strong> {item.metadata.creator}</p>}
-                {item.metadata.collection && <p><strong>Collection:</strong> {item.metadata.collection}</p>}
+                {item.metadata.collection && item.metadata.collection.length > 0 && (
+                  <p><strong>Collection:</strong> {item.metadata.collection.join(', ')}</p>
+                )}
                 {item.metadata.subjects && item.metadata.subjects.length > 0 && (
                   <div>
                     <strong>Subjects:</strong>

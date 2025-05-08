@@ -1,3 +1,4 @@
+// src/components/query-builder/query-builder-panel.tsx
 "use client";
 
 import React, { useState } from 'react';
@@ -10,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { RotateCcw } from 'lucide-react';
 
 interface QueryBuilderPanelProps {
-  onSearch: (query: string, fields: QueryField[], dateRange: QueryDateRange) => void;
+  onSearch: (query: string) => void; // Signature changed
   isSearching: boolean;
 }
 
@@ -23,39 +24,81 @@ export function QueryBuilderPanel({ onSearch, isSearching }: QueryBuilderPanelPr
   const [dateRange, setDateRange] = useState<QueryDateRange>(initialDateRange);
 
   const handleSearch = () => {
-    // In a real app, you'd combine mainQuery with queryFields and dateRange
-    // into a single Internet Archive compatible query string.
-    // For this mock, we'll pass them separately.
-    let combinedQuery = mainQuery;
-    // Basic combination logic (can be much more sophisticated)
-    queryFields.forEach(field => {
+    const queryParts: string[] = [];
+
+    if (mainQuery.trim()) {
+      queryParts.push(mainQuery.trim());
+    }
+
+    queryFields.forEach((field, i) => {
       if (field.term.trim()) {
-        const operator = field.operator ? ` ${field.operator} ` : ' ';
-        const term = field.isPhrase ? `"${field.term}"` : field.term;
-        const target = field.targetField !== 'any' ? `${field.targetField}:` : '';
-        combinedQuery += `${operator}${target}${term}`;
+        let termSegment = field.isPhrase ? `"${field.term.trim()}"` : field.term.trim();
+        if (field.useWildcard && !field.isPhrase && !termSegment.endsWith('*')) {
+          termSegment += '*';
+        }
+        
+        const targetPrefix = field.targetField !== 'any' ? `${field.targetField}:` : '';
+        let currentClause = `${targetPrefix}${termSegment}`;
+
+        // Determine operator logic
+        const isFirstActualTerm = queryParts.length === 0;
+        
+        if (field.operator) { // AND, OR, NOT
+            if (!isFirstActualTerm || field.operator === 'NOT') { // Add operator if not the very first part, or if it's a leading NOT
+                queryParts.push(field.operator);
+            }
+        } else if (!isFirstActualTerm) { // No explicit operator, and not the first term, so default to AND
+          queryParts.push('AND');
+        }
+        queryParts.push(currentClause);
       }
     });
+
+    let combinedQuery = queryParts.join(' ');
+
     if (dateRange.startDate || dateRange.endDate) {
-      // This is a simplified representation; IA uses specific date formats in queries
-      const start = dateRange.startDate ? `date:[${dateRange.startDate.toISOString().split('T')[0]}` : 'date:[';
-      const end = dateRange.endDate ? ` TO ${dateRange.endDate.toISOString().split('T')[0]}]` : ']';
-      if (dateRange.startDate || dateRange.endDate) {
-         let dateQueryPart = dateRange.startDate ? dateRange.startDate.toISOString().split('T')[0] : '';
-        if (dateRange.startDate && dateRange.endDate) {
-          dateQueryPart += ` TO ${dateRange.endDate.toISOString().split('T')[0]}`;
-        } else if (dateRange.endDate) {
-          dateQueryPart = dateRange.endDate.toISOString().split('T')[0];
+      let dateQueryFilter = "";
+      const formatDate = (date: Date) => date.toISOString().split('T')[0];
+      
+      if (dateRange.startDate && dateRange.endDate) {
+        dateQueryFilter = `date:[${formatDate(dateRange.startDate)} TO ${formatDate(dateRange.endDate)}]`;
+      } else if (dateRange.startDate) {
+        dateQueryFilter = `date:[${formatDate(dateRange.startDate)} TO *]`;
+      } else if (dateRange.endDate) {
+        dateQueryFilter = `date:[* TO ${formatDate(dateRange.endDate)}]`;
+      }
+      
+      if (dateQueryFilter) {
+        if (combinedQuery) {
+          combinedQuery += ` AND ${dateQueryFilter}`;
+        } else {
+          combinedQuery = dateQueryFilter;
         }
-        combinedQuery += ` date:[${dateQueryPart}]`;
       }
     }
     
-    onSearch(combinedQuery.trim(), queryFields, dateRange);
+    // Ensure mediatype is for videos, if not already specified by user.
+    const mediaTypeFilter = "mediatype:(movies OR video)";
+    if (combinedQuery) {
+        if (!combinedQuery.toLowerCase().includes("mediatype:")) {
+            combinedQuery += ` AND ${mediaTypeFilter}`;
+        }
+    } else {
+        combinedQuery = mediaTypeFilter; // Default to searching all videos if query is otherwise empty
+    }
+
+    if (combinedQuery.trim()) {
+       onSearch(combinedQuery.trim());
+    } else {
+        // This case should ideally be covered by the mediaTypeFilter default
+        console.warn("Search query is empty after construction, this shouldn't happen if mediatype default is applied.");
+        // Fallback, though the logic above tries to ensure combinedQuery is not empty if it reaches here
+        onSearch(mediaTypeFilter); 
+    }
   };
 
   const handleSuggestionClick = (suggestion: string) => {
-    setMainQuery(suggestion); // Replace main query, or could append/modify
+    setMainQuery(suggestion);
   };
 
   const resetQueryBuilder = () => {
